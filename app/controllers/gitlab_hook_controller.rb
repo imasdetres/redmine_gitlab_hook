@@ -235,8 +235,9 @@ class GitlabHookController < SysController
     for commit in request.params['commits'] do
       #commit['message'].scan(%r{[#/](?<issue_id>[0-9]+)}) do
       #  issue_id = $~['issue_id']
-      commit['message'].scan(%r{[#/](?<issue_id>[0-9]+)}).uniq.each do |issue_id|
+      commit['message'].scan(%r{[#/](?<issue_id>[0-9]+)[\W_]}).uniq.each do |issue_id|
         # app/models/mail_handler.rb
+        logger.info("GitLabHook: WHAT THE FUCK #{issue_id}")
         issue = Issue.find_by(:id => issue_id)
         unless issue
           logger.warn("Could not find issue ##{issue_id}")
@@ -253,14 +254,14 @@ class GitlabHookController < SysController
         branch = exec2(git_command(prefix, "branch --contains #{commit['id']}", repository))
         branch = branch ? branch.gsub(/^\* /, '') : '??'
 
-        #if branch != request.params['project']['default_branch'] && branch !~ %r{/#{issue.id}}
-        #  logger.info("GitLabHook: Ignoring commit #{commit['id']} because branch (#{branch}) is not the default branch (#{request.params['project']['default_branch']}) and is not related to issue #{issue.id}")
-        #  next
-        #end
-        if branch != request.params['project']['default_branch']
-          logger.info("GitLabHook: Ignoring commit #{commit['id']} because branch (#{branch}) is not the default branch (#{request.params['project']['default_branch']})")
+        if branch != request.params['project']['default_branch'] && branch !~ %r{/#{issue.id}}
+          logger.info("GitLabHook: Ignoring commit #{commit['id']} because branch (#{branch}) is not the default branch (#{request.params['project']['default_branch']}) and is not related to issue #{issue.id}")
           next
         end
+        #if branch != request.params['project']['default_branch']
+        #  logger.info("GitLabHook: Ignoring commit #{commit['id']} because branch (#{branch}) is not the default branch (#{request.params['project']['default_branch']})")
+        #  next
+        #end
         if commit['message'] =~ /Merge branch '#{request.params['project']['default_branch']}' into/
           logger.info("GitLabHook: Ignoring commit #{commit['id']} with message \"#{commit['message']}\"")
 	  next

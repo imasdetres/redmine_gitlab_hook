@@ -211,20 +211,22 @@ class GitlabHookController < SysController
   def process_push(request, repository)
     logger.info("GitLabHook: Processing push")
 
-    if request.params['before'] == '0000000000000000000000000000000000000000'
+    is_new_branch = request.params['before'] == '0000000000000000000000000000000000000000'
+    ref_branch = request.params['ref'].sub(%r{\Arefs/heads/}, '')
+
+    if is_new_branch
       request.params['ref'].scan(%r{[#/](?<issue_id>[0-9]+)}) do
         issue = Issue.find_by(:id => $~['issue_id'])
 
         user = User.find_by_login(request.params['user_username'])
         user ||= User.anonymous
 
-        branch = request.params['ref'].gsub!('refs/heads/', '')
-        branch_url = "#{request.params['project']['web_url']}/compare/#{request.params['project']['default_branch']}...#{branch}"
+        branch_url = "#{request.params['project']['web_url']}/compare/#{request.params['project']['default_branch']}...#{ref_branch}"
 
         logger.info("GitLabHook: Commenting on issue #{issue.id} as #{user.login}")
         journal = issue.init_journal(user)
         journal.notes = 'p{ border:1px black; border-radius:1em; padding:1em; background:#EEEEEE; }. '
-        journal.notes += "Creada *nueva rama* \"#{branch}\":#{branch_url} de *#{request.params['project']['name']}*"
+        journal.notes += "Creada *nueva rama* \"#{ref_branch}\":#{branch_url} de *#{request.params['project']['name']}*"
 
         unless issue.save
           logger.warn("GitLabHook: Issue ##{issue.id} could not be saved")
@@ -251,8 +253,13 @@ class GitlabHookController < SysController
 
         version = exec2(git_command(prefix, "describe --long #{commit['id']}", repository))
         version ||= commit['id']
-        branch = exec2(git_command(prefix, "branch --contains #{commit['id']}", repository))
-        branch = branch ? branch.gsub(/^\* /, '') : '??'
+
+        if is_new_branch
+          branch = ref_branch
+        else
+          branch = exec2(git_command(prefix, "branch --contains #{commit['id']}", repository))
+          branch = branch ? branch.gsub(/^\* /, '') : '??'
+        end
 
         if branch != request.params['project']['default_branch'] && branch !~ %r{/#{issue.id}}
           logger.info("GitLabHook: Ignoring commit #{commit['id']} because branch (#{branch}) is not the default branch (#{request.params['project']['default_branch']}) and is not related to issue #{issue.id}")

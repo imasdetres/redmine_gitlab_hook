@@ -326,6 +326,14 @@ class GitlabHookController < SysController
     issue.changesets.where(scmid: commit_sha).exists?
   end
 
+  # Checks if a note for a given MR event already exists on the issue [#133466]
+  # Uses the MR label (e.g. 'Creado "MR#808":https://...') which is unique per MR + state.
+  def mr_already_noted?(issue, mr_label)
+    return false unless mr_label.present?
+    escaped = mr_label.gsub('%', '\%').gsub('_', '\_')
+    issue.journals.where("notes LIKE ?", "%#{escaped}%").exists?
+  end
+
   def process_merge_request(request)
     logger.info("GitLabHook: Processing MR")
 
@@ -361,15 +369,23 @@ class GitlabHookController < SysController
       verb = request.params['changes'].key?('state') ? request.params['changes']['state']['current'] : verb
       verb = request.params['changes'].key?('state_id') ? state_id_map[request.params['changes']['state_id']['current']] : verb
       if verb
-        logger.info("GitLabHook: Commenting on issue #{issue.id} as #{user.login}")
-        journal = issue.init_journal(user)
-        journal.notes = "p{ border:1px black; border-radius:1em; padding:1em; background:#EEEEEE; }. "
-        journal.notes += "#{state_tr_map[verb].capitalize()} \"MR##{request.params['object_attributes']['iid']}\":#{request.params['object_attributes']['url']}"
-        journal.notes += " (@#{request.params['object_attributes']['source_branch']}@"
-        journal.notes += " ➔ @#{request.params['object_attributes']['target_branch']}@)"
-        journal.notes += verb_icon_map.key?(verb) ? " #{verb_icon_map[verb]}" : ""
-        unless issue.save
-          logger.warn("GitLabHook: Issue ##{issue.id} could not be saved")
+        mr_url = request.params['object_attributes']['url']
+        mr_label = "#{state_tr_map[verb].capitalize()} \"MR##{request.params['object_attributes']['iid']}\":#{mr_url}"
+
+        # Skip if a note for this MR event already exists on the issue (deduplication) [#133466]
+        if mr_already_noted?(issue, mr_label)
+          logger.info("GitLabHook: Skipping MR note for issue ##{issue.id} - already noted: #{mr_label}")
+        else
+          logger.info("GitLabHook: Commenting on issue #{issue.id} as #{user.login}")
+          journal = issue.init_journal(user)
+          journal.notes = "p{ border:1px black; border-radius:1em; padding:1em; background:#EEEEEE; }. "
+          journal.notes += mr_label
+          journal.notes += " (@#{request.params['object_attributes']['source_branch']}@"
+          journal.notes += " ➔ @#{request.params['object_attributes']['target_branch']}@)"
+          journal.notes += verb_icon_map.key?(verb) ? " #{verb_icon_map[verb]}" : ""
+          unless issue.save
+            logger.warn("GitLabHook: Issue ##{issue.id} could not be saved")
+          end
         end
       else
         logger.info("GitLabHook: No state change detected")

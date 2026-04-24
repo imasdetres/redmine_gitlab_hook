@@ -239,10 +239,16 @@ class GitlabHookController < SysController
       #  issue_id = $~['issue_id']
       commit['message'].scan(%r{[#/](?<issue_id>[0-9]+)[\W_]}).uniq.each do |issue_id|
         # app/models/mail_handler.rb
-        logger.info("GitLabHook: WHAT THE FUCK #{issue_id}")
+        logger.info("GitLabHook: Processing commit #{commit['id']} for issue #{issue_id}")
         issue = Issue.find_by(:id => issue_id)
         unless issue
           logger.warn("Could not find issue ##{issue_id}")
+          next
+        end
+
+        # Skip if this commit is already associated to the issue (deduplication) [#133466]
+        if commit_already_associated?(issue, commit['id'])
+          logger.info("GitLabHook: Skipping commit #{commit['id']} for issue ##{issue.id} - already in associated revisions")
           next
         end
 
@@ -310,6 +316,14 @@ class GitlabHookController < SysController
         end
       end
     end
+  end
+
+  # Checks if a commit is already in the issue's associated revisions [#133466]
+  # The changesets_issues join table links issues to changesets (indexed),
+  # and changesets.scmid stores the full commit SHA.
+  def commit_already_associated?(issue, commit_sha)
+    return false unless commit_sha.present?
+    issue.changesets.where(scmid: commit_sha).exists?
   end
 
   def process_merge_request(request)

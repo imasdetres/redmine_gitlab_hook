@@ -18,7 +18,7 @@ class GitlabHookController < SysController
 
         case request.params['object_kind']
           when 'push'
-            process_push(request, repository)
+            noted_commits = process_push(request, repository)
           when 'merge_request'
             process_merge_request(request)
         end
@@ -26,6 +26,12 @@ class GitlabHookController < SysController
         if git_success
           # Fetch the new changesets into Redmine
           repository.fetch_changesets
+
+          # Associate changesets with issues that the plugin found via branch name
+          # patterns (e.g. /11719_) but Redmine core missed because it only looks
+          # for #N in commit messages [#133466]
+          associate_noted_commits(repository, noted_commits) if noted_commits&.any?
+
           render(:plain => 'OK', :status => :ok)
         else
           render(:plain => "Git command failed on repository: #{repository.identifier}!", :status => :not_acceptable)
@@ -211,6 +217,9 @@ class GitlabHookController < SysController
   def process_push(request, repository)
     logger.info("GitLabHook: Processing push")
 
+    # Collect (issue_id, commit_sha) pairs for post-fetch association [#133466]
+    noted_commits = []
+
     is_new_branch = request.params['before'] == '0000000000000000000000000000000000000000'
     ref_branch = request.params['ref'].sub(%r{\Arefs/heads/}, '')
 
@@ -313,9 +322,13 @@ class GitlabHookController < SysController
 
         unless issue.save
           logger.warn("Issue ##{issue.id} could not be saved")
+        else
+          noted_commits << { issue_id: issue.id, commit_sha: commit['id'] }
         end
       end
     end
+
+    noted_commits
   end
 
   # Checks if a commit is already in the issue's associated revisions [#133466]
@@ -332,6 +345,24 @@ class GitlabHookController < SysController
     return false unless mr_label.present?
     escaped = mr_label.gsub('%', '\%').gsub('_', '\_')
     issue.journals.where("notes LIKE ?", "%#{escaped}%").exists?
+  end
+
+  # After fetch_changesets, associate changesets with issues that the plugin
+  # found via branch name patterns (e.g. /11719_) but Redmine core missed
+  # because it only recognizes #N in commit messages [#133466]
+  def associate_noted_commits(repository, noted_commits)
+    noted_commits.each do |entry|
+      issue = Issue.find_by(id: entry[:issue_id])
+      next unless issue
+
+      changeset = repository.changesets.find_by(scmid: entry[:commit_sha])
+      next unless changeset
+
+      unless issue.changesets.where(id: changeset.id).exists?
+        issue.changesets << changeset
+        logger.info("GitLabHook: Associated changeset #{entry[:commit_sha]} with issue ##{entry[:issue_id]}")
+      end
+    end
   end
 
   def process_merge_request(request)

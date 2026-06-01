@@ -1,4 +1,5 @@
 require 'json'
+require_relative '../../lib/issue_id_extractor'
 
 class GitlabHookController < SysController
 
@@ -224,8 +225,9 @@ class GitlabHookController < SysController
     ref_branch = request.params['ref'].sub(%r{\Arefs/heads/}, '')
 
     if is_new_branch
-      request.params['ref'].scan(%r{[#/](?<issue_id>[0-9]+)}) do
-        issue = Issue.find_by(:id => $~['issue_id'])
+      IssueIdExtractor.from_branch_ref(request.params['ref']).each do |issue_id|
+        issue = Issue.find_by(:id => issue_id)
+        next unless issue
 
         user = User.find_by_login(request.params['user_username'])
         user ||= User.anonymous
@@ -246,7 +248,7 @@ class GitlabHookController < SysController
     for commit in request.params['commits'] do
       #commit['message'].scan(%r{[#/](?<issue_id>[0-9]+)}) do
       #  issue_id = $~['issue_id']
-      commit['message'].scan(%r{[#/](?<issue_id>[0-9]+)[\W_]}).uniq.each do |issue_id|
+      IssueIdExtractor.from_commit_message(commit['message']).each do |issue_id|
         # app/models/mail_handler.rb
         logger.info("GitLabHook: Processing commit #{commit['id']} for issue #{issue_id}")
         issue = Issue.find_by(:id => issue_id)
@@ -276,7 +278,7 @@ class GitlabHookController < SysController
           branch = branch ? branch.gsub(/^\* /, '') : '??'
         end
 
-        if branch != request.params['project']['default_branch'] && branch !~ %r{/#{issue.id}}
+        if branch != request.params['project']['default_branch'] && !IssueIdExtractor.branch_related_to_issue?(branch, issue.id)
           logger.info("GitLabHook: Ignoring commit #{commit['id']} because branch (#{branch}) is not the default branch (#{request.params['project']['default_branch']}) and is not related to issue #{issue.id}")
           next
         end
@@ -369,9 +371,10 @@ class GitlabHookController < SysController
     logger.info("GitLabHook: Processing MR")
 
     source_branch = request.params['object_attributes']['source_branch']
-    if source_branch =~ %r{[^/]*/(?<issue_id>[0-9]+)}
+    mr_issue_id = IssueIdExtractor.from_mr_source_branch(source_branch)
+    if mr_issue_id
       # app/models/mail_handler.rb
-      issue = Issue.find_by(:id => $~['issue_id'])
+      issue = Issue.find_by(:id => mr_issue_id)
 
       user = User.find_by_login(request.params['user']['username'])
       user ||= User.anonymous

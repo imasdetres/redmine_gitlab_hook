@@ -304,7 +304,16 @@ class GitlabHookController < SysController
         journal.notes += "Creada *nueva versión* \"#{version}\":#{commit['url']} de *#{request.params['project']['name']}* (rama *#{branch}*)"
 
         unless message.empty?
-          journal.notes += "\n*Descripción*: _{font-size:1.2em}#{message}_"
+          first_line, _, body = message.partition("\n")
+          journal.notes += "\n*Descripción*: _{font-size:1.2em}#{first_line}_"
+          body = body.strip
+          unless body.empty?
+            # Commit message bodies are Markdown; render them via the {{markdown}}
+            # macro (redmine_id3_misc) instead of Textile, which mangles multi-line
+            # content. Guard: neutralize any '}}' so it can't close the macro early.
+            body = body.gsub('}}', '} }')
+            journal.notes += "\n{{markdown\n#{body}\n}}"
+          end
         end
 
         subnotes = ''

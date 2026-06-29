@@ -305,6 +305,7 @@ class GitlabHookController < SysController
 
         unless message.empty?
           first_line, _, body = message.partition("\n")
+          first_line = first_line.strip
           journal.notes += "\n*Descripción*: _{font-size:1.2em}#{first_line}_"
           body = body.strip
           unless body.empty?

@@ -1,5 +1,6 @@
 require 'json'
 require_relative '../../lib/issue_id_extractor'
+require_relative '../../lib/mr_event'
 
 class GitlabHookController < SysController
 
@@ -377,6 +378,13 @@ class GitlabHookController < SysController
     end
   end
 
+  # Determines the MR event "verb" (created/reopened/closed/merged/opened) from a
+  # merge_request webhook payload, or nil when the event should not produce a
+  # note. See MrEvent (lib/mr_event.rb) and #177020 for the rationale.
+  def mr_verb(params)
+    MrEvent.verb(params)
+  end
+
   def process_merge_request(request)
     logger.info("GitLabHook: Processing MR")
 
@@ -389,15 +397,10 @@ class GitlabHookController < SysController
       user = User.find_by_login(request.params['user']['username'])
       user ||= User.anonymous
 
-      state_id_map = {
-        1 => 'opened',
-        2 => 'closed',
-        3 => 'merged',
-        4 => 'locked'
-      }
       state_tr_map = {
         'created' => 'creado',
         'opened' => 'abierto',
+        'reopened' => 'reabierto',
         'closed' => 'cerrado',
         'merged' => 'mugido',
         'locked' => 'bloqueado'
@@ -407,11 +410,7 @@ class GitlabHookController < SysController
         'merged' => '✅🎉'
       }
 
-      verb = nil
-      verb = request.params['changes'].empty? ? 'created' : verb
-      verb = request.params['changes'].key?('created_at') ? 'created' : verb
-      verb = request.params['changes'].key?('state') ? request.params['changes']['state']['current'] : verb
-      verb = request.params['changes'].key?('state_id') ? state_id_map[request.params['changes']['state_id']['current']] : verb
+      verb = mr_verb(request.params)
       if verb
         mr_url = request.params['object_attributes']['url']
         mr_label = "#{state_tr_map[verb].capitalize()} \"MR##{request.params['object_attributes']['iid']}\":#{mr_url}"

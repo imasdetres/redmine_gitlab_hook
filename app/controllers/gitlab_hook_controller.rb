@@ -222,7 +222,10 @@ class GitlabHookController < SysController
     repository = Repository::Git.new
     repository.identifier = identifier
     repository.url = local_url
-    repository.is_default = true
+    # Only the project's first repository becomes the default; unconditionally
+    # setting is_default used to steal the default flag from the project's main
+    # repository on every auto-created repo [#37852]
+    repository.is_default = project.repositories.empty?
     repository.project = project
     repository.save
     return repository

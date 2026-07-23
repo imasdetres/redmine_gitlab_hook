@@ -1,6 +1,7 @@
 require 'json'
 require_relative '../../lib/issue_id_extractor'
 require_relative '../../lib/mr_event'
+require_relative '../../lib/repository_params'
 
 class GitlabHookController < SysController
 
@@ -10,7 +11,6 @@ class GitlabHookController < SysController
   def index
     if request.post?
       repository = find_repository
-      p repository.inspect
       git_success = true
       if repository
         # Fetch the changes from GitLab
@@ -46,6 +46,16 @@ class GitlabHookController < SysController
 
 
   private
+
+
+  # Accept the sys API key from the X-Gitlab-Token header ("Secret token" field
+  # in GitLab webhook settings) in addition to the ?key= query param [#37852]
+  def check_enabled
+    if params[:key].blank? && request.headers['X-Gitlab-Token'].present?
+      params[:key] = request.headers['X-Gitlab-Token']
+    end
+    super
+  end
 
 
   def system(command)
@@ -125,13 +135,15 @@ class GitlabHookController < SysController
   end
 
 
+  # Repository name/namespace come from the query string or, failing that, are
+  # derived from the webhook payload's project object (see RepositoryParams).
   def get_repository_name
-    return params[:repository_name] && params[:repository_name].downcase
+    RepositoryParams.name(params)
   end
 
 
   def get_repository_namespace
-    return params[:repository_namespace] && params[:repository_namespace].downcase
+    RepositoryParams.namespace(params)
   end
 
 
@@ -141,7 +153,7 @@ class GitlabHookController < SysController
     repo_namespace = get_repository_namespace
     repo_name = get_repository_name || get_project_identifier
     identifier = repo_namespace.present? ? "#{repo_namespace}_#{repo_name}" : repo_name
-    return identifier
+    return identifier && identifier.tr('/', '_')
   end
 
   # Gets the project identifier from the querystring parameters and if that's not supplied, assume
@@ -189,7 +201,7 @@ class GitlabHookController < SysController
     raise TypeError, 'Local repository path is not set' unless Setting.plugin_redmine_gitlab_hook['local_repositories_path'].to_s.present?
 
     identifier = get_repository_identifier
-    remote_url = params[:repository_git_url]
+    remote_url = RepositoryParams.git_url(params)
     prefix = Setting.plugin_redmine_gitlab_hook['git_command_prefix'].to_s
 
     raise TypeError, 'Remote repository URL is null' unless remote_url.present?
@@ -200,7 +212,7 @@ class GitlabHookController < SysController
     local_url = File.join(local_root_path, repo_namespace, repo_name)
     git_file = File.join(local_url, 'HEAD')
 
-    unless File.exists?(git_file)
+    unless File.exist?(git_file)
       FileUtils.mkdir_p(local_url)
       command = clone_repository(prefix, remote_url, local_url)
       unless exec(command)

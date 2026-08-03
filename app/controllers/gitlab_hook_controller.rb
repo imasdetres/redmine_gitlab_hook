@@ -7,6 +7,16 @@ class GitlabHookController < SysController
 
   GIT_BIN = Redmine::Configuration[:scm_git_command] || 'git'
 
+  # Raised when auto-create can't clone the remote repository. Rendered as a
+  # plain-text 422 so the message shows up directly in GitLab's webhook test
+  # output instead of a generic {"status":500} [#37852]
+  class CloneError < StandardError; end
+
+  rescue_from CloneError do |exception|
+    logger.error("GitLabHook: #{exception.message}")
+    render(:plain => exception.message, :status => :unprocessable_content)
+  end
+
 
   def index
     if request.post?
@@ -216,7 +226,11 @@ class GitlabHookController < SysController
       FileUtils.mkdir_p(local_url)
       command = clone_repository(prefix, remote_url, local_url)
       unless exec(command)
-        raise RuntimeError, "Can't clone URL #{remote_url}"
+        raise CloneError, "Can't clone #{remote_url}: if the repository exists, " \
+          "the most likely cause is that the Redmine server's deploy key is not " \
+          "enabled on the GitLab project (GitLab: Settings > Repository > Deploy " \
+          "keys > Privately accessible deploy keys > enable 'redmine@redmine'). " \
+          "See production.log for the full git output."
       end
     end
     repository = Repository::Git.new
